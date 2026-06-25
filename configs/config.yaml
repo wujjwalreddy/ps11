@@ -1,0 +1,81 @@
+# ============================================================
+# BigEarthNet Cross-Modal Retrieval — Master Config (v3)
+# Foundation model backbones + non-overlapping band split
+# ============================================================
+
+paths:
+  s2_root:        "/path/to/BigEarthNet-S2"
+  s1_root:        "/path/to/BigEarthNet-S1"
+  metadata:       "/path/to/metadata.parquet"
+  output_dir:     "./outputs"
+  checkpoint_dir: "./checkpoints"
+  index_dir:      "./faiss_index"
+
+data:
+  num_workers:     8
+  pin_memory:      true
+  # NON-OVERLAPPING band split:
+  #   optical = B02 B03 B04            (3-ch RGB @ 10m)
+  #   ms      = B05 B06 B07 B08 B8A B09 B11 B12  (8-ch non-RGB)
+  #   sar     = VV VH                  (2-ch backscatter)
+  optical_bands:   ["B02", "B03", "B04"]
+  ms_bands:        ["B05", "B06", "B07", "B08", "B8A", "B09", "B11", "B12"]
+  sar_bands:       ["VV", "VH"]
+  image_size:      224                 # ViT models prefer 224
+  clip_percentile: 2
+
+  # Per-channel stats
+  optical_mean:    [429.94, 614.21, 590.24]
+  optical_std:     [572.42, 582.30, 675.88]
+  ms_mean:         [950.68, 1792.20, 2086.47, 2218.94, 2396.00, 2512.37, 1828.85, 1241.68]
+  ms_std:          [729.89,  841.17,  938.39, 1344.90, 1124.43, 1175.74,  993.10,  821.74]
+  sar_mean:        [-12.619, -19.951]
+  sar_std:         [5.262,   5.515]
+
+model:
+  embed_dim:        512
+  projection_hidden: 2048
+  dropout:          0.1
+  pretrained:       true
+  freeze_backbone:  true          # freeze foundation backbones, train adapter+head
+
+  # Backbone selection per modality
+  # dinov2  → DINOv2-Base (ViT-B/14), needs: pip install transformers
+  # prithvi → Prithvi-100M (ViT-L),   needs: pip install transformers
+  # satmae  → SatMAE (ViT-L),         needs: pip install transformers
+  # swin_t  → Swin-Tiny,              needs: torchvision (already installed)
+  # resnet50→ ResNet-50,              always available (fallback)
+  optical_backbone: "dinov2"      # DINOv2-Base — best RGB foundation model
+  ms_backbone:      "prithvi"     # Prithvi-100M — S2-native, 8-band support
+  sar_backbone:     "resnet50"    # No SAR foundation model exists yet
+
+training:
+  epochs:       50
+  batch_size:   64              # reduce to 32 if VRAM < 6GB with ViT backbones
+  accum_steps:  4               # effective batch = 256
+  lr:           1.0e-4          # lower LR suits frozen foundation models
+  lr_backbone:  1.0e-5          # separate (lower) LR for backbone if unfreezing
+  weight_decay: 1.0e-4
+  warmup_epochs: 5
+  amp:          true
+  seed:         42
+
+  loss:
+    temperature:       0.07
+    lambda_cross:      1.0
+    lambda_same:       0.5
+    lambda_cls:        0.3
+    use_hard_negatives: true
+    hard_neg_weight:   2.0
+    queue_size:        4096
+
+faiss:
+  index_type: "IVFFlat"
+  nlist:      1024
+  nprobe:     64
+  use_gpu:    true
+  metric:     "cosine"
+
+eval:
+  K:                   [5, 10]
+  relevance_threshold: 0.0      # Jaccard > 0 = relevant
